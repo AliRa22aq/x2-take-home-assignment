@@ -4,8 +4,9 @@ module orderbook::Orderbook {
     use sui::transfer;
     use sui::tx_context::{Self, TxContext};
     use sui::sui::{SUI};
-    use sui::coin::{ Self, Coin };
+    use sui::coin::{ Self, Coin, CoinMetadata };
     use std::vector;
+    use sui::balance::{Self, Balance};
 
     const EInsufficientBalance:u64 = 0;
     const ENotAllowed:u64= 1;
@@ -18,70 +19,62 @@ module orderbook::Orderbook {
     struct SellOrder<phantom T> has key, store {
         id: UID,
         askPerToken: u64,
-        amount: Coin<T>,
+        tokens_deposite: Balance<T>,
         owner: address,
         status: u64,
-        siu_deposited: Coin<SUI>
     }
 
     struct BuyOrder<phantom T> has key, store {
         id: UID,
         bidPerToken: u64,
-        amount: Coin<T>,
+        tokens_desired: Balance<T>,
+        sui_deposite: Balance<SUI>,
         owner: address,
         status: u64,
-        siu_deposited: Coin<SUI>
     }
 
-    // Orderbook Struct
     struct OrderBook<phantom  T> has key {
         id: UID,
         sellOrders: vector<ID>,
         buyOrders: vector<ID>,
-        asset: Coin<T>,
+        coinMetadata: CoinMetadata<T>,
         orderCounts: u64
     }
 
     /// Create a new shared orderbook for a perticular asset.
-    public fun create_orderbook<T>(coin: Coin<T>, ctx: &mut TxContext) {
+    public fun create_orderbook<T>(_coinMetadata: CoinMetadata<T>, ctx: &mut TxContext) {
 
         let orderBook = OrderBook {
             id: object::new(ctx),
             sellOrders: vector::empty(),
             buyOrders: vector::empty(),
-            asset: coin,
-            orderCounts: 0
+            orderCounts: 0,
+            coinMetadata: _coinMetadata
         };
 
         transfer::share_object(orderBook);
 
     }
 
-    // Functinos related buy order
     public entry fun place_a_buy_order<T>(
         _bidPerToken: u64, 
-        _amount: Coin<T>, 
+        _tokenAmountDesired: Coin<T>, 
         payment: Coin<SUI>, 
         _orderbook: &mut OrderBook<T>,
         ctx: &mut TxContext
     ) {
-        let totalAmount = coin::value(&_amount) * _bidPerToken;
-        assert!(coin::value(&mut payment) >= totalAmount, EInsufficientBalance);
+        let sui_required_for_purchase = coin::value(&_tokenAmountDesired) * _bidPerToken;
+        assert!(coin::value(&mut payment) >= sui_required_for_purchase, EInsufficientBalance);
         
-        /*
-            Transfer Sui from the user
-        */
-
-
         let orderId = object::new(ctx);
 
-        let newBuyOrder = BuyOrder {
+        let newBuyOrder = BuyOrder<T>{
             id: orderId,
             bidPerToken: _bidPerToken,
-            amount: _amount,
+            tokens_desired: coin::into_balance<T>(_tokenAmountDesired),
+            sui_deposite: coin::into_balance<SUI>(payment),
             owner: tx_context::sender(ctx),
             status: TRADE_PENDING,
-            siu_deposited: payment
         };
 
         _orderbook.orderCounts = _orderbook.orderCounts + 1;
@@ -96,58 +89,50 @@ module orderbook::Orderbook {
         
         buyOrder.status = TRADE_CANCELED;
 
-        // let amount = coin::take(&mut coin::into_balance(&buyOrder.siu_deposited), 0, ctx);
-        // transfer::transfer(amount, buyOrder.owner)
-
         // Return Sui to the orignal owner
+        let sui_deposite = coin::take<SUI>(&mut buyOrder.sui_deposite, 0, ctx);
+        transfer::transfer(sui_deposite, buyOrder.owner)
 
     }
 
-    public entry fun fulfill_buy_order<T>(
+    public entry fun fulfill_buy_order<T: drop>(
         buyOrder: &mut BuyOrder<T>, 
-        payment: Coin<T>, 
+        tokenPayment: Coin<T>, 
         ctx: &mut TxContext
         ) {
         assert!(buyOrder.status == TRADE_PENDING, ENotAllowed);
-        assert!(buyOrder.owner == tx_context::sender(ctx), ENotAllowed);
 
         buyOrder.status = TRADE_FULFILLED;
-
-        // let totalAmount = coin::value(&buyOrder.amount) * buyOrder.bidPerToken;
-        // assert!(coin::value(&mut payment) >= totalAmount, EInsufficientBalance);
-
+                
+        // Send Sui to the seller
+        let sui_deposite = coin::take<SUI>(&mut buyOrder.sui_deposite, 0, ctx);
+        transfer::transfer(sui_deposite, tx_context::sender(ctx));
 
         // Send tokens to the order owner
-
-        // Send Sui to the seller
+        assert!( coin::value(&tokenPayment) >= balance::value<T>(&buyOrder.tokens_desired), EInsufficientBalance);
+        transfer::transfer(tokenPayment, buyOrder.owner);
 
     }
 
-    // Functinos related sell order
+    // Sell orders
 
     public entry fun place_a_sell_order<T>(
         _askPerToken: u64, 
-        _amount: Coin<T>, 
+        token_amount_to_sell: Coin<T>,
         _orderbook: &mut OrderBook<T>,
         ctx: &mut TxContext
     ) {
-        let totalAmount = coin::value(&_amount) * _askPerToken;
-        assert!(coin::value(&mut _amount) >= totalAmount, EInsufficientBalance);
-
-        /*
-            Transfer tokens from the user
-        */
 
         let orderId = object::new(ctx);
 
         let newSellOrder = SellOrder<T> {
             id: orderId,
             askPerToken: _askPerToken,
-            amount: _amount,
+            tokens_deposite: coin::into_balance<T>(token_amount_to_sell),
             owner: tx_context::sender(ctx),
             status: TRADE_PENDING,
-            siu_deposited: coin::zero<SUI>(ctx)
         };
+
 
         _orderbook.orderCounts = _orderbook.orderCounts + 1;
         vector::push_back<ID>(&mut _orderbook.sellOrders, object::id(&newSellOrder));
@@ -162,31 +147,33 @@ module orderbook::Orderbook {
         sellOrder.status = TRADE_CANCELED;
 
         // Return Tokens back to the orignal owner
+        let tokens_deposite = coin::take<T>(&mut sellOrder.tokens_deposite, 0, ctx);
+        transfer::transfer(tokens_deposite, sellOrder.owner);
 
     }
 
     public entry fun fulfill_sell_order<T>(
-        sellOrder: &mut BuyOrder<T>, 
+        sellOrder: &mut SellOrder<T>, 
         payment: Coin<SUI>, 
         ctx: &mut TxContext
         ) {
         assert!(sellOrder.status == TRADE_PENDING, ENotAllowed);
-        assert!(sellOrder.owner == tx_context::sender(ctx), ENotAllowed);
 
         sellOrder.status = TRADE_FULFILLED;
 
-        // let totalAmount = coin::value(&buyOrder.amount) * buyOrder.bidPerToken;
-        // assert!(coin::value(&mut payment) >= totalAmount, EInsufficientBalance);
+        // Send sui to the order creator
+        let sui_required_for_purchase = balance::value(&sellOrder.tokens_deposite) * sellOrder.askPerToken;
+        assert!(coin::value(&mut payment) >= sui_required_for_purchase, EInsufficientBalance);
+        transfer::transfer(payment, sellOrder.owner);
 
-
-        // Send Sui to the order owner
-
-        // Send tokens to the buyer
+        // Send tokens to current user
+        let tokens_desired = coin::take<T>(&mut sellOrder.tokens_deposite, 0, ctx);
+        transfer::transfer(tokens_desired, tx_context::sender(ctx));
 
     }
 
-    // Getter functions
 
+    // Getter functions
     public fun get_buy_orders<T>(_orderbook: &OrderBook<T>): vector<ID> {
         _orderbook.buyOrders
     }
@@ -194,5 +181,7 @@ module orderbook::Orderbook {
     public fun get_sell_orders<T>(_orderbook: &OrderBook<T>): vector<ID> {
         _orderbook.sellOrders
     }
+
+
 
 }

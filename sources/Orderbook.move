@@ -4,13 +4,12 @@ module orderbook::Orderbook {
     use sui::transfer;
     use sui::tx_context::{Self, TxContext};
     use sui::sui::{SUI};
-    use sui::coin::{ Self, Coin, CoinMetadata };
+    use sui::coin::{ Self, Coin };
     use std::vector;
     use sui::balance::{Self, Balance};
 
     const EInsufficientBalance:u64 = 0;
     const ENotAllowed:u64= 1;
-
 
     const TRADE_PENDING: u64 = 0;
     const TRADE_FULFILLED: u64 = 1;
@@ -37,19 +36,18 @@ module orderbook::Orderbook {
         id: UID,
         sellOrders: vector<ID>,
         buyOrders: vector<ID>,
-        coinMetadata: CoinMetadata<T>,
         orderCounts: u64
     }
 
     /// Create a new shared orderbook for a perticular asset.
-    public fun create_orderbook<T>(_coinMetadata: CoinMetadata<T>, ctx: &mut TxContext) {
+    public fun create_orderbook<T>(ctx: &mut TxContext) {
 
-        let orderBook = OrderBook {
+        let orderBook = OrderBook<T> {
             id: object::new(ctx),
             sellOrders: vector::empty(),
             buyOrders: vector::empty(),
-            orderCounts: 0,
-            coinMetadata: _coinMetadata
+            orderCounts: 0
+            // coinMetadata: _coinMetadata
         };
 
         transfer::share_object(orderBook);
@@ -79,7 +77,7 @@ module orderbook::Orderbook {
 
         _orderbook.orderCounts = _orderbook.orderCounts + 1;
         vector::push_back<ID>(&mut _orderbook.buyOrders, object::id(&newBuyOrder));
-        transfer::transfer(newBuyOrder, tx_context::sender(ctx));
+        transfer::public_transfer(newBuyOrder, tx_context::sender(ctx));
 
     }
 
@@ -91,7 +89,7 @@ module orderbook::Orderbook {
 
         // Return Sui to the orignal owner
         let sui_deposite = coin::take<SUI>(&mut buyOrder.sui_deposite, 0, ctx);
-        transfer::transfer(sui_deposite, buyOrder.owner)
+        transfer::public_transfer(sui_deposite, buyOrder.owner)
 
     }
 
@@ -106,11 +104,11 @@ module orderbook::Orderbook {
                 
         // Send Sui to the seller
         let sui_deposite = coin::take<SUI>(&mut buyOrder.sui_deposite, 0, ctx);
-        transfer::transfer(sui_deposite, tx_context::sender(ctx));
+        transfer::public_transfer(sui_deposite, tx_context::sender(ctx));
 
         // Send tokens to the order owner
         assert!( coin::value(&tokenPayment) >= balance::value<T>(&buyOrder.tokens_desired), EInsufficientBalance);
-        transfer::transfer(tokenPayment, buyOrder.owner);
+        transfer::public_transfer(tokenPayment, buyOrder.owner);
 
     }
 
@@ -136,7 +134,7 @@ module orderbook::Orderbook {
 
         _orderbook.orderCounts = _orderbook.orderCounts + 1;
         vector::push_back<ID>(&mut _orderbook.sellOrders, object::id(&newSellOrder));
-        transfer::transfer(newSellOrder, tx_context::sender(ctx));
+        transfer::public_transfer(newSellOrder, tx_context::sender(ctx));
 
     }
 
@@ -148,7 +146,7 @@ module orderbook::Orderbook {
 
         // Return Tokens back to the orignal owner
         let tokens_deposite = coin::take<T>(&mut sellOrder.tokens_deposite, 0, ctx);
-        transfer::transfer(tokens_deposite, sellOrder.owner);
+        transfer::public_transfer(tokens_deposite, sellOrder.owner);
 
     }
 
@@ -164,14 +162,13 @@ module orderbook::Orderbook {
         // Send sui to the order creator
         let sui_required_for_purchase = balance::value(&sellOrder.tokens_deposite) * sellOrder.askPerToken;
         assert!(coin::value(&mut payment) >= sui_required_for_purchase, EInsufficientBalance);
-        transfer::transfer(payment, sellOrder.owner);
+        transfer::public_transfer(payment, sellOrder.owner);
 
         // Send tokens to current user
         let tokens_desired = coin::take<T>(&mut sellOrder.tokens_deposite, 0, ctx);
-        transfer::transfer(tokens_desired, tx_context::sender(ctx));
+        transfer::public_transfer(tokens_desired, tx_context::sender(ctx));
 
     }
-
 
     // Getter functions
     public fun get_buy_orders<T>(_orderbook: &OrderBook<T>): vector<ID> {
@@ -181,7 +178,5 @@ module orderbook::Orderbook {
     public fun get_sell_orders<T>(_orderbook: &OrderBook<T>): vector<ID> {
         _orderbook.sellOrders
     }
-
-
 
 }

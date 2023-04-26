@@ -1,4 +1,4 @@
-module orderbook::Orderbook {
+module orderbook::orderbook {
 
     use sui::object::{Self, UID, ID};
     use sui::transfer;
@@ -7,6 +7,7 @@ module orderbook::Orderbook {
     use sui::coin::{ Self, Coin };
     use std::vector;
     use sui::balance::{Self, Balance};
+    // use std::debug;
 
     const EInsufficientBalance:u64 = 0;
     const ENotAllowed:u64= 1;
@@ -26,7 +27,7 @@ module orderbook::Orderbook {
     struct BuyOrder<phantom T> has key, store {
         id: UID,
         bidPerToken: u64,
-        tokens_desired: Balance<T>,
+        tokens_desired: u64,
         sui_deposite: Balance<SUI>,
         owner: address,
         status: u64,
@@ -47,7 +48,6 @@ module orderbook::Orderbook {
             sellOrders: vector::empty(),
             buyOrders: vector::empty(),
             orderCounts: 0
-            // coinMetadata: _coinMetadata
         };
 
         transfer::share_object(orderBook);
@@ -56,28 +56,30 @@ module orderbook::Orderbook {
 
     public entry fun place_a_buy_order<T>(
         _bidPerToken: u64, 
-        _tokenAmountDesired: Coin<T>, 
+        _tokenAmountDesired: u64, 
         payment: Coin<SUI>, 
         _orderbook: &mut OrderBook<T>,
         ctx: &mut TxContext
     ) {
-        let sui_required_for_purchase = coin::value(&_tokenAmountDesired) * _bidPerToken;
+        let sui_required_for_purchase = _tokenAmountDesired * _bidPerToken;
         assert!(coin::value(&mut payment) >= sui_required_for_purchase, EInsufficientBalance);
         
         let orderId = object::new(ctx);
 
+        let owner = tx_context::sender(ctx);
+
         let newBuyOrder = BuyOrder<T>{
             id: orderId,
             bidPerToken: _bidPerToken,
-            tokens_desired: coin::into_balance<T>(_tokenAmountDesired),
+            tokens_desired: _tokenAmountDesired,
             sui_deposite: coin::into_balance<SUI>(payment),
-            owner: tx_context::sender(ctx),
+            owner: owner,
             status: TRADE_PENDING,
         };
 
         _orderbook.orderCounts = _orderbook.orderCounts + 1;
         vector::push_back<ID>(&mut _orderbook.buyOrders, object::id(&newBuyOrder));
-        transfer::public_transfer(newBuyOrder, tx_context::sender(ctx));
+        transfer::transfer(newBuyOrder, owner);
 
     }
 
@@ -94,8 +96,8 @@ module orderbook::Orderbook {
     }
 
     public entry fun fulfill_buy_order<T: drop>(
-        buyOrder: &mut BuyOrder<T>, 
         tokenPayment: Coin<T>, 
+        buyOrder: &mut BuyOrder<T>, 
         ctx: &mut TxContext
         ) {
         assert!(buyOrder.status == TRADE_PENDING, ENotAllowed);
@@ -107,7 +109,7 @@ module orderbook::Orderbook {
         transfer::public_transfer(sui_deposite, tx_context::sender(ctx));
 
         // Send tokens to the order owner
-        assert!( coin::value(&tokenPayment) >= balance::value<T>(&buyOrder.tokens_desired), EInsufficientBalance);
+        assert!( coin::value(&tokenPayment) >= buyOrder.tokens_desired, EInsufficientBalance);
         transfer::public_transfer(tokenPayment, buyOrder.owner);
 
     }
@@ -134,7 +136,7 @@ module orderbook::Orderbook {
 
         _orderbook.orderCounts = _orderbook.orderCounts + 1;
         vector::push_back<ID>(&mut _orderbook.sellOrders, object::id(&newSellOrder));
-        transfer::public_transfer(newSellOrder, tx_context::sender(ctx));
+        transfer::transfer(newSellOrder, tx_context::sender(ctx));
 
     }
 
@@ -170,13 +172,24 @@ module orderbook::Orderbook {
 
     }
 
+
     // Getter functions
-    public fun get_buy_orders<T>(_orderbook: &OrderBook<T>): vector<ID> {
-        _orderbook.buyOrders
+
+    public fun get_buy_orders<T>(_orderbook: &OrderBook<T>): &vector<ID> {
+        &_orderbook.buyOrders
     }
 
-    public fun get_sell_orders<T>(_orderbook: &OrderBook<T>): vector<ID> {
-        _orderbook.sellOrders
+    public fun get_sell_orders<T>(_orderbook: &OrderBook<T>): &vector<ID> {
+        &_orderbook.sellOrders
     }
+
+    public fun get_buy_order_status<T>(_orderbook: &BuyOrder<T>): u64 {
+        _orderbook.status
+    }
+
+    public fun get_sell_order_status<T>(_orderbook: &SellOrder<T>): u64 {
+        _orderbook.status
+    }
+
 
 }

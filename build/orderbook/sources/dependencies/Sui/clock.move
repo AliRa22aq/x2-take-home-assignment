@@ -6,9 +6,10 @@
 module sui::clock {
     use sui::object::{Self, UID};
     use sui::transfer;
+    use sui::tx_context::{Self, TxContext};
 
-    friend sui::genesis;
-    friend sui::sui_system;
+    /// Sender is not @0x0 the system address.
+    const ENotSystemAddress: u64 = 0;
 
     /// Singleton shared object that exposes time to Move calls.  This
     /// object is found at address 0x6, and can only be read (accessed
@@ -35,7 +36,9 @@ module sui::clock {
 
     /// Create and share the singleton Clock -- this function is
     /// called exactly once, during genesis.
-    public(friend) fun create() {
+    fun create(ctx: &TxContext) {
+        assert!(tx_context::sender(ctx) == @0x0, ENotSystemAddress);
+
         transfer::share_object(Clock {
             id: object::clock(),
             // Initialised to zero, but set to a real timestamp by a
@@ -45,14 +48,47 @@ module sui::clock {
         })
     }
 
-    /// Set the Clock's timestamp -- this function should only be called by
-    /// `sui::system_state::consensus_commit_prologue`.
-    public(friend) fun set_timestamp(clock: &mut Clock, timestamp_ms: u64) {
+    fun consensus_commit_prologue(
+        clock: &mut Clock,
+        timestamp_ms: u64,
+        ctx: &TxContext,
+    ) {
+        // Validator will make a special system call with sender set as 0x0.
+        assert!(tx_context::sender(ctx) == @0x0, ENotSystemAddress);
+
         clock.timestamp_ms = timestamp_ms
+    }
+
+    #[test_only]
+    /// Expose the functionality of `create()` (usually only done during
+    /// genesis) for tests that want to create a Clock.
+    public fun create_for_testing(ctx: &mut sui::tx_context::TxContext): Clock {
+        Clock {
+            id: object::new(ctx),
+            timestamp_ms: 0,
+        }
+    }
+
+    #[test_only]
+    /// For transactional tests (if a Clock is used as a shared object).
+    public fun share_for_testing(clock: Clock) {
+        transfer::share_object(clock)
     }
 
     #[test_only]
     public fun increment_for_testing(clock: &mut Clock, tick: u64) {
         clock.timestamp_ms = clock.timestamp_ms + tick;
+    }
+
+    #[test_only]
+    public fun set_for_testing(clock: &mut Clock, timestamp_ms: u64) {
+        assert!(timestamp_ms >= clock.timestamp_ms, 0);
+        clock.timestamp_ms = timestamp_ms;
+    }
+
+    #[test_only]
+    public fun destroy_for_testing(clock: Clock) {
+        let Clock { id, timestamp_ms: _ }  = clock;
+        object::delete(id);
     }
 }

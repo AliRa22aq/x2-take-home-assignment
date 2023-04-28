@@ -1,167 +1,195 @@
-module orderbook::Orderbook {
-
+module orderbook::orderbook {
 
     use sui::object::{Self, UID, ID};
-    // use sui::object::object_table as ot;
     use sui::transfer;
     use sui::tx_context::{Self, TxContext};
-    use sui::sui::SUI;
+    use sui::sui::{SUI};
     use sui::coin::{ Self, Coin };
     use std::vector;
-    // use sui::balance::{Self, Balance};
+    use sui::balance::{Self, Balance};
+    // use std::debug;
 
     const EInsufficientBalance:u64 = 0;
+    const ENotAllowed:u64= 1;
 
     const TRADE_PENDING: u64 = 0;
     const TRADE_FULFILLED: u64 = 1;
     const TRADE_CANCELED: u64 = 2;
 
-    struct SellOrder has key, store {
+    struct SellOrder<phantom T> has key, store {
         id: UID,
         askPerToken: u64,
-        amount: u64
+        tokens_deposite: Balance<T>,
+        owner: address,
+        status: u64,
     }
 
-    struct BuyOrder has key, store {
+    struct BuyOrder<phantom T> has key, store {
         id: UID,
         bidPerToken: u64,
-        amount: u64
+        tokens_desired: u64,
+        sui_deposite: Balance<SUI>,
+        owner: address,
+        status: u64,
     }
 
     struct OrderBook<phantom  T> has key {
         id: UID,
         sellOrders: vector<ID>,
         buyOrders: vector<ID>,
-        asset: Coin<T>,
         orderCounts: u64
     }
 
-    public fun create_orderbook<T>(coin: Coin<T>, ctx: &mut TxContext): OrderBook<T> {
+    /// Create a new shared orderbook for a perticular asset.
+    public fun create_orderbook<T>(ctx: &mut TxContext) {
 
-        OrderBook {
+        let orderBook = OrderBook<T> {
             id: object::new(ctx),
             sellOrders: vector::empty(),
             buyOrders: vector::empty(),
-            asset: coin,
             orderCounts: 0
-        }
+        };
+
+        transfer::share_object(orderBook);
 
     }
 
     public entry fun place_a_buy_order<T>(
         _bidPerToken: u64, 
-        _amount: u64, 
+        _tokenAmountDesired: u64, 
+        payment: Coin<SUI>, 
         _orderbook: &mut OrderBook<T>,
-        payment: &mut Coin<SUI>, 
         ctx: &mut TxContext
     ) {
-        let totalAmount: u64 = _amount * _bidPerToken;
-        assert!(coin::value(payment) >= totalAmount, EInsufficientBalance);
+        let sui_required_for_purchase = _tokenAmountDesired * _bidPerToken;
+        assert!(coin::value(&mut payment) >= sui_required_for_purchase, EInsufficientBalance);
         
         let orderId = object::new(ctx);
 
-        let newBuyOrder = BuyOrder {
+        let owner = tx_context::sender(ctx);
+
+        let newBuyOrder = BuyOrder<T>{
             id: orderId,
             bidPerToken: _bidPerToken,
-            amount: _amount
+            tokens_desired: _tokenAmountDesired,
+            sui_deposite: coin::into_balance<SUI>(payment),
+            owner: owner,
+            status: TRADE_PENDING,
         };
 
         _orderbook.orderCounts = _orderbook.orderCounts + 1;
         vector::push_back<ID>(&mut _orderbook.buyOrders, object::id(&newBuyOrder));
-        transfer::transfer(newBuyOrder, tx_context::sender(ctx));
+        transfer::transfer(newBuyOrder, owner);
 
     }
 
-    public fun get_buy_orders<T>(_orderbook: &OrderBook<T>): vector<ID> {
-        _orderbook.buyOrders
-    }
-
-    // public fun get_orders_by_user<T>(user: address, _orderbook: &OrderBook<T>): vector<ID> {
-        // _orderbook.buyOrders
-        // ot.
-    // }
-
-
-
-    // struct Forge has key, store {
-    //     id: UID,
-    //     swords_created: u64,
-    // }
-
-    // // Part 3: Module initializer to be executed when this module is published
-    // fun init(ctx: &mut TxContext) {
-    //     let admin = Forge {
-    //         id: object::new(ctx),
-    //         swords_created: 0,
-    //     };
-    //     // Transfer the forge object to the module/package publisher
-    //     transfer::transfer(admin, tx_context::sender(ctx));
-    // }
-
-    // // Part 4: Accessors required to read the struct attributes
-    // public fun magic(self: &Sword): u64 {
-    //     self.magic
-    // }
-
-    // public fun strength(self: &Sword): u64 {
-    //     self.strength
-    // }
-
-    // public fun swords_created(self: &Forge): u64 {
-    //     self.swords_created
-    // }
-
-    // Part 5: Public/entry functions (introduced later in the tutorial)
-
-    // Part 6: Private functions (if any)
-}
-
-    #[test_only]
-    module orderbook::tests {
-    use sui::test_scenario;
-    // use orderbook::BasicCoin;
-
-
-    #[test]
-    public fun get_buy_orders_for_testing() {
-
-
-        // let owner = @0x1;
-        // let scenario_val = test_scenario::begin(owner);
+    public entry fun cancel_buy_order<T>(buyOrder: &mut BuyOrder<T>, ctx: &mut TxContext) {
+        assert!(buyOrder.owner == tx_context::sender(ctx), ENotAllowed);
+        assert!(buyOrder.status == TRADE_PENDING, ENotAllowed);
         
-        // let scenario = &mut scenario_val;
+        buyOrder.status = TRADE_CANCELED;
 
-        // // Create two ColorObjects owned by `owner`, and obtain their IDs.
-        // let (id1, id2) = {
-        //     let ctx = test_scenario::ctx(scenario);
-        //     color_object::create(255, 255, 255, ctx);
-        //     let id1 =
-        //         object::id_from_address(tx_context::last_created_object_id(ctx));
-        //     color_object::create(0, 0, 0, ctx);
-        //     let id2 =
-        //         object::id_from_address(tx_context::last_created_object_id(ctx));
-        //     (id1, id2)
-        // };
-        // test_scenario::next_tx(scenario, owner);
-        // {
-        //     let obj1 = test_scenario::take_from_sender_by_id<ColorObject>(scenario, id1);
-        //     let obj2 = test_scenario::take_from_sender_by_id<ColorObject>(scenario, id2);
-        //     let (red, green, blue) = color_object::get_color(&obj1);
-        //     assert!(red == 255 && green == 255 && blue == 255, 0);
+        // Return Sui to the orignal owner
+        let sui_deposite = coin::take<SUI>(&mut buyOrder.sui_deposite, 0, ctx);
+        transfer::public_transfer(sui_deposite, buyOrder.owner)
 
-        //     color_object::copy_into(&obj2, &mut obj1);
-        //     test_scenario::return_to_sender(scenario, obj1);
-        //     test_scenario::return_to_sender(scenario, obj2);
-        // };
-        // test_scenario::next_tx(scenario, owner);
-        // {
-        //     let obj1 = test_scenario::take_from_sender_by_id<ColorObject>(scenario, id1);
-        //     let (red, green, blue) = color_object::get_color(&obj1);
-        //     assert!(red == 0 && green == 0 && blue == 0, 0);
-        //     test_scenario::return_to_sender(scenario, obj1);
-        // };
-        // test_scenario::end(scenario_val);
-    
     }
-    
+
+    public entry fun fulfill_buy_order<T: drop>(
+        tokenPayment: Coin<T>, 
+        buyOrder: &mut BuyOrder<T>, 
+        ctx: &mut TxContext
+        ) {
+        assert!(buyOrder.status == TRADE_PENDING, ENotAllowed);
+
+        buyOrder.status = TRADE_FULFILLED;
+                
+        // Send Sui to the seller
+        let sui_deposite = coin::take<SUI>(&mut buyOrder.sui_deposite, 0, ctx);
+        transfer::public_transfer(sui_deposite, tx_context::sender(ctx));
+
+        // Send tokens to the order owner
+        assert!( coin::value(&tokenPayment) >= buyOrder.tokens_desired, EInsufficientBalance);
+        transfer::public_transfer(tokenPayment, buyOrder.owner);
+
+    }
+
+    // Sell orders
+
+    public entry fun place_a_sell_order<T>(
+        _askPerToken: u64, 
+        token_amount_to_sell: Coin<T>,
+        _orderbook: &mut OrderBook<T>,
+        ctx: &mut TxContext
+    ) {
+
+        let orderId = object::new(ctx);
+
+        let newSellOrder = SellOrder<T> {
+            id: orderId,
+            askPerToken: _askPerToken,
+            tokens_deposite: coin::into_balance<T>(token_amount_to_sell),
+            owner: tx_context::sender(ctx),
+            status: TRADE_PENDING,
+        };
+
+
+        _orderbook.orderCounts = _orderbook.orderCounts + 1;
+        vector::push_back<ID>(&mut _orderbook.sellOrders, object::id(&newSellOrder));
+        transfer::transfer(newSellOrder, tx_context::sender(ctx));
+
+    }
+
+    public entry fun cancel_sell_order<T>(sellOrder: &mut SellOrder<T>, ctx: &mut TxContext) {
+        assert!(sellOrder.owner == tx_context::sender(ctx), ENotAllowed);
+        assert!(sellOrder.status == TRADE_PENDING, ENotAllowed);
+        
+        sellOrder.status = TRADE_CANCELED;
+
+        // Return Tokens back to the orignal owner
+        let tokens_deposite = coin::take<T>(&mut sellOrder.tokens_deposite, 0, ctx);
+        transfer::public_transfer(tokens_deposite, sellOrder.owner);
+
+    }
+
+    public entry fun fulfill_sell_order<T>(
+        sellOrder: &mut SellOrder<T>, 
+        payment: Coin<SUI>, 
+        ctx: &mut TxContext
+        ) {
+        assert!(sellOrder.status == TRADE_PENDING, ENotAllowed);
+
+        sellOrder.status = TRADE_FULFILLED;
+
+        // Send sui to the order creator
+        let sui_required_for_purchase = balance::value(&sellOrder.tokens_deposite) * sellOrder.askPerToken;
+        assert!(coin::value(&mut payment) >= sui_required_for_purchase, EInsufficientBalance);
+        transfer::public_transfer(payment, sellOrder.owner);
+
+        // Send tokens to current user
+        let tokens_desired = coin::take<T>(&mut sellOrder.tokens_deposite, 0, ctx);
+        transfer::public_transfer(tokens_desired, tx_context::sender(ctx));
+
+    }
+
+
+    // Getter functions
+
+    public fun get_buy_orders<T>(_orderbook: &OrderBook<T>): &vector<ID> {
+        &_orderbook.buyOrders
+    }
+
+    public fun get_sell_orders<T>(_orderbook: &OrderBook<T>): &vector<ID> {
+        &_orderbook.sellOrders
+    }
+
+    public fun get_buy_order_status<T>(_orderbook: &BuyOrder<T>): u64 {
+        _orderbook.status
+    }
+
+    public fun get_sell_order_status<T>(_orderbook: &SellOrder<T>): u64 {
+        _orderbook.status
+    }
+
+
 }

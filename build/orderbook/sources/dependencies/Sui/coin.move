@@ -16,13 +16,11 @@ module sui::coin {
     use std::vector;
     use sui::event;
 
-    /// For when a type passed to create_supply is not a one-time witness.
+    /// A type passed to create_supply is not a one-time witness.
     const EBadWitness: u64 = 0;
-
-    /// For when invalid arguments are passed to a function.
+    /// Invalid arguments are passed to a function.
     const EInvalidArg: u64 = 1;
-
-    /// For when trying to split a coin more times than its balance allows.
+    /// Trying to split a coin more times than its balance allows.
     const ENotEnough: u64 = 2;
 
     /// A coin of type `T` worth `value`. Transferable and storable
@@ -323,7 +321,7 @@ module sui::coin {
 
     /// Destroy the coin `c` and decrease the total supply in `cap`
     /// accordingly.
-    public fun burn<T>(cap: &mut TreasuryCap<T>, c: Coin<T>): u64 {
+    public entry fun burn<T>(cap: &mut TreasuryCap<T>, c: Coin<T>): u64 {
         let Coin { id, balance } = c;
         object::delete(id);
         balance::decrease_supply(&mut cap.total_supply, balance)
@@ -350,16 +348,7 @@ module sui::coin {
     public entry fun mint_and_transfer<T>(
         c: &mut TreasuryCap<T>, amount: u64, recipient: address, ctx: &mut TxContext
     ) {
-        transfer::transfer(mint(c, amount, ctx), recipient)
-    }
-
-    /// Burn a Coin and reduce the total_supply. Invokes `burn()`.
-    public entry fun burn_<T>(cap: &mut TreasuryCap<T>, c: Coin<T>) {
-        burn(cap, c);
-    }
-
-    spec burn_ {
-        include Burn<T>;
+        transfer::public_transfer(mint(c, amount, ctx), recipient)
     }
 
     // === Update coin metadata ===
@@ -433,9 +422,9 @@ module sui::coin {
     }
 
     #[test_only]
-    /// Destroy a `Coin` with any value in it for testing purposes.
-    public fun destroy_for_testing<T>(self: Coin<T>): u64 {
-        let Coin { id, balance } = self;
+    /// Burn coins of any type for testing purposes only
+    public fun burn_for_testing<T>(coin: Coin<T>): u64 {
+        let Coin { id, balance } = coin;
         object::delete(id);
         balance::destroy_for_testing(balance)
     }

@@ -1,10 +1,16 @@
 /*
     * What's happening in this contract?
 
-
     - Indexing all the order IDs by price categories
     - storing all the orders as Key-Value (IDs => Order) pairs in the main orderbook struct
+    - Matching engine will try to match the newly created order with existing offers
 
+    Problem: At the moment, matching only happens when someone is selling exact order size at exact price as someone is trying to buy
+    Todos:
+    - Make partial order matching
+    - Over over order matching by taking using more than one order
+
+    - All remainig functions
 
 */
 

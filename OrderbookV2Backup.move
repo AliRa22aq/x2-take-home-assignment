@@ -1,9 +1,8 @@
 /*
-    * What's happening in this contract?
+What's happening in this contract?
 
-
-    - Indexing all the order IDs by price categories
-    - storing all the orders as Key-Value (IDs => Order) pairs in the main orderbook struct
+    - Indexing all the order references by price
+    - storing all the order as key valye pair in the main orderbook struct
 
 
 */
@@ -16,7 +15,7 @@ module orderbook::orderbookV2 {
     use std::vector::{Self};
     use sui::balance::{Self, Balance};
     
-    use sui::object::{ Self, UID, ID };
+    use sui::object::{Self, UID};
     use sui::dynamic_object_field as ofield;
     
     // use std::debug;
@@ -24,7 +23,6 @@ module orderbook::orderbookV2 {
 
     const EInsufficientBalance:u64 = 0;
     const ENotAllowed:u64= 1;
-    const EOrderNotExists:u64 =1;
 
     const TRADE_PENDING: u64 = 0;
     const TRADE_FULFILLED: u64 = 1;
@@ -36,7 +34,7 @@ module orderbook::orderbookV2 {
         owner: address,
         asking_price_of_each_unit: u64,
         selling_amount: u64,
-        // minimum_selling_amount: u64, TODO
+        // minimum_selling_amount: u64,
         deposited_balance: Balance<S>,
         earned_amount: u64,
         status: u64
@@ -47,7 +45,7 @@ module orderbook::orderbookV2 {
         owner: address,
         bidding_price_of_each_unit: u64,
         buying_amount: u64,
-        // minimum_buying_amount: u64, TODO
+        // minimum_buying_amount: u64,
         deposited_balance: Balance<E>,
         earned_amount: u64,
         status: u64
@@ -55,8 +53,8 @@ module orderbook::orderbookV2 {
 
     struct OrderFamily <phantom S, phantom E> has key, store {
         id: UID,
-        selling_orders: vector<ID>,
-        buying_orders: vector<ID>,
+        selling_orders: vector<SellingOrder<S,E>>,
+        buying_orders: vector<BuyingOrder<S,E>>,
     }
 
     struct OrderBook<phantom S, phantom E> has key {
@@ -76,12 +74,14 @@ module orderbook::orderbookV2 {
 
         let genesis_order_family = OrderFamily<S,E> {
             id: object::new(ctx),
-            selling_orders: vector::empty<ID>(),
-            buying_orders: vector::empty<ID>(),
+            selling_orders: vector::empty<SellingOrder<S,E>>(),
+            buying_orders: vector::empty<BuyingOrder<S,E>>(),
         };
 
-        // In case the order family is not availabe then this will be used to return an empty vector
+        // In case the order family is not availabe then this will be used to return an 
+        // empty vector
         ofield::add(&mut orderBook.id, 0, genesis_order_family );
+        
         transfer::share_object(orderBook);
     
     }
@@ -90,41 +90,42 @@ module orderbook::orderbookV2 {
         _asking_price_of_each_unit: u64,
         _selling_amount: u64,
         _deposited_coins: Coin<S>,
+        // _minimum_selling_amount: u64, TODO
         orderbook: &mut OrderBook<S,E>,
         ctx: &mut TxContext
     ) {
-
         assert!(_selling_amount > 0, 1);
         assert!(coin::value(&_deposited_coins) == _selling_amount*_asking_price_of_each_unit, 1);
 
-        let new_selling_order_id = object::new(ctx);
-        let new_selling_order_id_ref = object::uid_to_inner(&new_selling_order_id);
-
         // Create a new selling order struct
         let new_selling_order = SellingOrder<S,E> {
-            id: new_selling_order_id,
+            id: object::new(ctx),
             owner: tx_context::sender(ctx),
             asking_price_of_each_unit: _asking_price_of_each_unit,
             selling_amount: _selling_amount,
+            // minimum_selling_amount: _minimum_selling_amount,
             deposited_balance: coin::into_balance(_deposited_coins),
             earned_amount: 0,
             status: TRADE_PENDING
         };
 
         // Check if any customer exists to fulfill this order
-        let cutomer_exists: bool = is_buying_order_exists_by_price(orderbook, _asking_price_of_each_unit);
-
-        // If customer exists then try to get that order
+        let cutomer_exists = is_buying_order_exists_by_price(orderbook, _asking_price_of_each_unit);
+        
+        // If customer exists then try to match the order
         if(cutomer_exists){
 
-            let order_family =
-                ofield::remove<u64, OrderFamily<S,E> >(&mut orderbook.id, _asking_price_of_each_unit);
-            let buying_order_id = vector::remove<ID>(&mut order_family.buying_orders, 0);
-            let buying_order =
-                ofield::remove<ID, BuyingOrder<S,E>>(&mut orderbook.id, buying_order_id);
-            
+            let OrderFamily {id: _, selling_orders: _, buying_orders} =
+                ofield::borrow<u64, OrderFamily<S,E> >(&mut orderbook.id, _asking_price_of_each_unit);
+            let buying_order = vector::borrow(buying_orders, 0);
+
             // Exact match  
             if(new_selling_order.selling_amount == buying_order.buying_amount){
+
+                let OrderFamily {id, selling_orders, buying_orders} =
+                    ofield::remove(&mut orderbook.id, _asking_price_of_each_unit);
+                object::delete(id);
+                let buying_order = vector::remove(&mut buying_orders, 0);
 
                 let selling_earned_amount = balance::value(&buying_order.deposited_balance);
                 let buying_earned_amount = balance::value(&new_selling_order.deposited_balance);
@@ -138,60 +139,77 @@ module orderbook::orderbookV2 {
                 new_selling_order.earned_amount = selling_earned_amount;
                 buying_order.earned_amount = buying_earned_amount;
 
+                let updated_order_family = OrderFamily<S,E> {
+                    id: object::new(ctx),
+                    selling_orders, 
+                    buying_orders
+                };
+            
+                ofield::add(&mut orderbook.id, _asking_price_of_each_unit, updated_order_family );
+
                 let buyer_address = buying_order.owner;
                 let seller_address = new_selling_order.owner;
 
-                // Transfer new assets to both parties
                 transfer::public_transfer(selling_coins , buyer_address);
                 transfer::public_transfer(buying_coins, seller_address);
 
-                // Transfer both fulfilled orders objects to their respective owners. As we can't drop them 
                 transfer::transfer(buying_order , buyer_address);
                 transfer::transfer(new_selling_order, seller_address);
-                ofield::add(&mut orderbook.id, _asking_price_of_each_unit, order_family );
 
             }
 
             // Partial Match: TODO
 
-            // Matched but not fulfilled because any reason.
             else {
-               
-                vector::insert(&mut order_family.buying_orders, buying_order_id, 0);
-                vector::push_back(&mut order_family.selling_orders, new_selling_order_id_ref);   
-                
-                ofield::add(&mut orderbook.id, buying_order_id, buying_order );
-                ofield::add(&mut orderbook.id, new_selling_order_id_ref, new_selling_order );
-                ofield::add(&mut orderbook.id, _asking_price_of_each_unit, order_family );
 
+                let OrderFamily {id, selling_orders, buying_orders} = 
+                    ofield::remove(&mut orderbook.id, _asking_price_of_each_unit);
+                object::delete(id);
+
+                vector::push_back(&mut selling_orders, new_selling_order);
+
+                let updated_order_family = OrderFamily<S,E> {
+                    id: object::new(ctx),
+                    selling_orders, 
+                    buying_orders
+                };
+            
+                ofield::add(&mut orderbook.id, _asking_price_of_each_unit, updated_order_family );
+   
             }
 
         }   
 
-        // If no customer exist then add a new selling order entry in record
+        // If not then add a new order entry
         else {
 
-            // Check if order family for this price exists or not
             let order_family_exist = ofield::exists_(&orderbook.id, _asking_price_of_each_unit);
             
             if(order_family_exist){
+                // If exist than take orderFamily struct and push this order in orders vec.
+                let OrderFamily {id, selling_orders, buying_orders} = 
+                    ofield::remove(&mut orderbook.id, _asking_price_of_each_unit);
+                object::delete(id);
 
-                let order_family =
-                    ofield::borrow_mut<u64, OrderFamily<S,E> >(&mut orderbook.id, _asking_price_of_each_unit);
-                vector::push_back(&mut order_family.selling_orders, new_selling_order_id_ref); 
-                ofield::add(&mut orderbook.id, new_selling_order_id_ref, new_selling_order );
+                vector::push_back(&mut selling_orders, new_selling_order);
+
+                let updated_order_family = OrderFamily<S,E> {
+                    id: object::new(ctx),
+                    selling_orders, 
+                    buying_orders
+                };
+            
+                ofield::add(&mut orderbook.id, _asking_price_of_each_unit, updated_order_family );
             
             }
             else {
                 // If not than create a new OrderFamily struct and set this order only entry of the vector.
                 let newOrderFamily = OrderFamily<S,E> {
                     id: object::new(ctx),
-                    selling_orders: vector::singleton(new_selling_order_id_ref),
-                    buying_orders: vector::empty<ID>(),
+                    selling_orders: vector::singleton(new_selling_order),
+                    buying_orders: vector::empty<BuyingOrder<S,E>>(),
                 };
-                ofield::add(&mut orderbook.id, _asking_price_of_each_unit, newOrderFamily );
-                ofield::add(&mut orderbook.id, new_selling_order_id_ref, new_selling_order );
-
+                ofield::add(&mut orderbook.id, _asking_price_of_each_unit, newOrderFamily );        
             };
 
         };
@@ -200,44 +218,7 @@ module orderbook::orderbookV2 {
         if( _asking_price_of_each_unit > orderbook.best_selling_order_price){
             orderbook.best_selling_order_price = _asking_price_of_each_unit;
         }
-
-    }
-
-    public fun is_buying_order_exists_by_price<S,E>(orderbook: &OrderBook<S,E>, price: u64): bool {
-        
-        if(ofield::exists_(&orderbook.id, price)) {
-
-            let OrderFamily {id: _, selling_orders: _, buying_orders} = 
-                ofield::borrow<u64, OrderFamily<S,E>>(&orderbook.id, price);
-
-            if( vector::length(buying_orders) > 0){
-                return true
-            }
-            else {
-                return false
-            }
-
-        }
-        else {
-            return false
-        }
-    }
-
-    public fun is_order_family_exists_by_price<S,E>(orderbook: &OrderBook<S,E>, price: u64): bool {
-        ofield::exists_(&orderbook.id, price)
-        // if(ofield::exists_(&orderbook.id, price)){
-        //     let OrderFamily {id: _, selling_orders, buying_orders: _} = 
-        //         ofield::borrow<u64, OrderFamily<S,E>>(&orderbook.id, price);
-        //     if( vector::length(selling_orders) > 0){
-        //         return true
-        //     }
-        //     else {
-        //         return false
-        //     }
-        // }
-        // else {
-        //     return false
-        // }
+            
     }
 
     // TODO
@@ -255,15 +236,40 @@ module orderbook::orderbookV2 {
     public entry fun take_best_selling_order<S,E>(){}
     public entry fun take_best_buying_order<S,E>(){}
 
+    public fun get_selling_order_by_id<S,E>(){}
+    public fun get_buying_order_by_id<S,E>(){}
 
-    public fun get_selling_order_by_id<S,E>(orderbook: &OrderBook<S,E>, selling_order_id: ID): &SellingOrder<S,E>{
-        assert!(ofield::exists_(&orderbook.id, selling_order_id), EOrderNotExists);
-        ofield::borrow<ID, SellingOrder<S,E>>(&orderbook.id, selling_order_id)
+
+    public fun is_buying_order_exists_by_price<S,E>(orderbook: &OrderBook<S,E>, price: u64): bool {
+        if(ofield::exists_(&orderbook.id, price)){
+            let OrderFamily {id: _, selling_orders: _, buying_orders} = 
+                ofield::borrow<u64, OrderFamily<S,E>>(&orderbook.id, price);
+            if( vector::length(buying_orders) > 0){
+                return true
+            }
+            else {
+                return false
+            }
+        }
+        else {
+            return false
+        }
     }
 
-    public fun get_buying_order_by_id<S,E> (orderbook: &OrderBook<S,E>, buying_order_id: ID): &BuyingOrder<S,E>{
-        assert!(ofield::exists_(&orderbook.id, buying_order_id), EOrderNotExists);
-        ofield::borrow<ID, BuyingOrder<S,E>>(&orderbook.id, buying_order_id)
+    public fun is_selling_order_exists_by_price<S,E>(orderbook: &OrderBook<S,E>, price: u64): bool {
+        if(ofield::exists_(&orderbook.id, price)){
+            let OrderFamily {id: _, selling_orders, buying_orders: _} = 
+                ofield::borrow<u64, OrderFamily<S,E>>(&orderbook.id, price);
+            if( vector::length(selling_orders) > 0){
+                return true
+            }
+            else {
+                return false
+            }
+        }
+        else {
+            return false
+        }
     }
 
 

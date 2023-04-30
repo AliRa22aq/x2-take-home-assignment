@@ -373,7 +373,7 @@ module orderbook::orderbookV2 {
         
         ofield::add(&mut ob.id, order_id, order );
 
-    }   
+    }
 
     public entry fun cancel_buy_order<S,E>(
         order_id: ID, 
@@ -403,13 +403,77 @@ module orderbook::orderbookV2 {
         
         ofield::add(&mut ob.id, order_id, order );
 
-    }   
+    }
 
-    public entry fun take_sell_order_by_price<S,E>(){}
-    public entry fun take_sell_order_by_id<S,E>(){}
+    public entry fun take_sell_order_by_id<S,E>(
+        order_id: ID, 
+        ob: &mut OrderBook<S,E>,
+        payment: Coin<E>,
+        ctx: &mut TxContext
+    ){
 
-    public entry fun take_buy_order_by_price<S,E>(){}
-    public entry fun take_buy_order_by_id<S,E>(){}
+        assert!(ofield::exists_( &ob.id, order_id ), EOrderNotExists);
+
+        let order = ofield::remove<ID, SellingOrder<S,E>>(&mut ob.id, order_id);
+        assert!(order.status == TRADE_PENDING || order.status == TRADE_PARTIALLY_FULFILLED, ENotAllowed);
+        
+        let required_amout_to_buy = order.asking_price_of_each_unit * order.selling_amount;
+        assert!(coin::value(&payment) == required_amout_to_buy, 1);
+
+        let of = ofield::borrow_mut<u64, OrderFamily<S,E>>(&mut ob.id, order.asking_price_of_each_unit);
+        let (exist, index_of_order_id) = vector::index_of<ID>(&of.selling_orders, &order_id);
+        assert!(exist, ENotAllowed);
+        vector::remove<ID>(&mut of.selling_orders, index_of_order_id);
+
+        order.status = TRADE_FULFILLED;
+        order.earned_amount = coin::value(&payment);
+
+
+        let to_take = order.selling_amount;
+        let to_take_from = &mut order.deposited_balance;
+
+        let coins_to_send_to_buyer = coin::take(to_take_from, to_take, ctx);
+        transfer::public_transfer( coins_to_send_to_buyer , tx_context::sender(ctx) );
+        transfer::public_transfer( payment , order.owner );
+        
+        ofield::add(&mut ob.id, order_id, order );
+
+    }
+
+    public entry fun take_buy_order_by_id<S,E>(
+        order_id: ID, 
+        ob: &mut OrderBook<S,E>,
+        payment: Coin<S>,
+        ctx: &mut TxContext
+    ){
+
+        assert!(ofield::exists_( &ob.id, order_id ), EOrderNotExists);
+
+        let order = ofield::remove<ID, BuyingOrder<S,E>>(&mut ob.id, order_id);
+        assert!(order.status == TRADE_PENDING || order.status == TRADE_PARTIALLY_FULFILLED, ENotAllowed);
+        
+        let required_amout_to_buy = order.buying_amount;
+        assert!(coin::value(&payment) == required_amout_to_buy, 1);
+
+        let of = ofield::borrow_mut<u64, OrderFamily<S,E>>(&mut ob.id, order.bidding_price_of_each_unit);
+        let (exist, index_of_order_id) = vector::index_of<ID>(&of.buying_orders, &order_id);
+        assert!(exist, ENotAllowed);
+        vector::remove<ID>(&mut of.buying_orders, index_of_order_id);
+
+        order.status = TRADE_FULFILLED;
+        order.earned_amount = coin::value(&payment);
+
+
+        let to_take = order.buying_amount * order.bidding_price_of_each_unit;
+        let to_take_from = &mut order.deposited_balance;
+
+        let coins_to_send_to_seller = coin::take(to_take_from, to_take, ctx);
+        transfer::public_transfer( coins_to_send_to_seller , tx_context::sender(ctx) );
+        transfer::public_transfer( payment , order.owner );
+        
+        ofield::add(&mut ob.id, order_id, order );
+
+    }
 
     public entry fun take_best_sell_order<S,E>(){}
     public entry fun take_best_buy_order<S,E>(){}
@@ -796,10 +860,86 @@ module orderbook::tests {
 
     }
 
+    #[test]
+    public fun test_take_order() {
+        let user = @0xA;
+        let user1 = @0xB;
+        let user2 = @0xC;
+
+        let scenario_val = test_scenario::begin(user);
+        let scenario = &mut scenario_val;
+        {
+            let ctx = test_scenario::ctx(scenario);
+            orderbookV2::create_orderbook<ERC20, SUI>(ctx);
+        };
+
+        // take sell order
+        test_scenario::next_tx(scenario, user1);
+        {
+    
+            let orderBook = test_scenario::take_shared<OrderBook<ERC20, SUI>>(scenario);
+            
+            let ctx = test_scenario::ctx(scenario);
+            let coins_to_sell = coin::mint_for_testing<ERC20>(100, ctx);
+            let selling_order_id = orderbookV2::create_sell_order<ERC20, SUI>(
+                10,
+                100,
+                coins_to_sell, 
+                &mut orderBook, 
+                ctx
+            );
+
+            test_scenario::next_tx(scenario, user2);
+            let ctx = test_scenario::ctx(scenario);
+            let payment = coin::mint_for_testing<SUI>(1000, ctx);
+
+            orderbookV2::take_sell_order_by_id(selling_order_id, &mut orderBook, payment, ctx );
+        
+            let sell_order = orderbookV2::get_sell_order_by_id(&orderBook, selling_order_id);
+            let ( _, _, _, deposited_amount, earned_amount, status) = orderbookV2::destruct_sell_order(sell_order);
+            assert!(deposited_amount == 0, 1);
+            assert!(earned_amount == 1000, 1);
+            assert!(status == 1, 1);
+
+            test_scenario::return_shared(orderBook);
+
+        };
+
+        // take buy order
+        test_scenario::next_tx(scenario, user2);
+        {
+    
+            let orderBook = test_scenario::take_shared<OrderBook<ERC20, SUI>>(scenario);
+            
+            let ctx = test_scenario::ctx(scenario);
+            let coins_to_deposite = coin::mint_for_testing<SUI>(1000, ctx);
+            let buy_order_id = orderbookV2::create_buy_order<ERC20, SUI>(
+                10,
+                100,
+                coins_to_deposite, 
+                &mut orderBook, 
+                ctx
+            );
+
+            test_scenario::next_tx(scenario, user2);
+            let ctx = test_scenario::ctx(scenario);
+            let payment = coin::mint_for_testing<ERC20>(100, ctx);
+
+            orderbookV2::take_buy_order_by_id(buy_order_id, &mut orderBook, payment, ctx);
+
+            let buy_order = orderbookV2::get_buy_order_by_id(&orderBook, buy_order_id);
+            let ( _, _, _, deposited_amount, earned_amount, status) = orderbookV2::destruct_buy_order(buy_order);
+            assert!(deposited_amount == 0, 1);
+            assert!(earned_amount == 100, 1);
+            assert!(status == 1, 1);
+
+            test_scenario::return_shared(orderBook);
+
+        };
+
+        test_scenario::end(scenario_val);
+
+    }
+
 
 }
-
-
-
-
-////////////////////////////////////////////////////////////////////////////////

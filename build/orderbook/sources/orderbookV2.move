@@ -358,18 +358,58 @@ module orderbook::orderbookV2 {
         ofield::exists_(&orderbook.id, price)
     }
 
-    // TODO
-    public entry fun cancel_selling_order<S,E>(){}
-    public entry fun cancel_buying_order<S,E>(){}
+    public entry fun cancel_sell_order<S,E>(
+        o: &mut SellingOrder<S,E>, 
+        ob: &mut OrderBook<S,E>,
+        ctx: &mut TxContext
+        ){
 
-    public entry fun take_selling_order_by_price<S,E>(){}
-    public entry fun take_selling_order_by_id<S,E>(){}
+        assert!(o.status == TRADE_PENDING || o.status == TRADE_PARTIALLY_FULFILLED, ENotAllowed);
+        assert!(o.owner != tx_context::sender(ctx), ENotAllowed);
 
-    public entry fun take_buying_order_by_price<S,E>(){}
-    public entry fun take_buying_order_by_id<S,E>(){}
+        // Remove ID from the OrderFamily
+        let price = o.asking_price_of_each_unit;
+        let of = ofield::borrow_mut<u64, OrderFamily<S,E>>(&mut ob.id, price);
+        let (exist, index_of_order_id) = vector::index_of<ID>(&of.selling_orders, &object::uid_to_inner(&o.id));
+        assert!(exist, ENotAllowed);
+        vector::remove<ID>(&mut of.selling_orders, index_of_order_id);
 
-    public entry fun take_best_selling_order<S,E>(){}
-    public entry fun take_best_buying_order<S,E>(){}
+        o.status = TRADE_CANCELED;
+
+    }   
+
+
+    // public entry fun cancel_buy_order<S,E>(){}
+        public entry fun cancel_buy_order<S,E>(
+        o: &mut BuyingOrder<S,E>, 
+        ob: &mut OrderBook<S,E>,
+        ctx: &mut TxContext
+        ){
+
+        assert!(o.status == TRADE_PENDING || o.status == TRADE_PARTIALLY_FULFILLED, ENotAllowed);
+        assert!(o.owner != tx_context::sender(ctx), ENotAllowed);
+
+        // Remove ID from the OrderFamily
+        let price = o.bidding_price_of_each_unit;
+        let of = ofield::borrow_mut<u64, OrderFamily<S,E>>(&mut ob.id, price);
+        let (exist, index_of_order_id) = vector::index_of<ID>(&of.buying_orders, &object::uid_to_inner(&o.id));
+        assert!(exist, ENotAllowed);
+        vector::remove<ID>(&mut of.buying_orders, index_of_order_id);
+
+        o.status = TRADE_CANCELED;
+
+    }   
+
+
+    public entry fun take_sell_order_by_price<S,E>(){}
+    public entry fun take_sell_order_by_id<S,E>(){}
+
+    public entry fun take_buy_order_by_price<S,E>(){}
+    public entry fun take_buy_order_by_id<S,E>(){}
+
+
+    public entry fun take_best_sell_order<S,E>(){}
+    public entry fun take_best_buy_order<S,E>(){}
 
 
     public fun get_sell_order_by_id<S,E>(orderbook: &OrderBook<S,E>, selling_order_id: ID): &SellingOrder<S,E>{
@@ -647,6 +687,12 @@ module orderbook::tests {
                 ctx
             );
 
+            let sell_order = orderbookV2::get_sell_order_by_id(&orderBook, selling_order_id);
+            let ( _, _, _, _, earned_amount, status) = orderbookV2::destruct_sell_order(sell_order);
+            assert!(earned_amount == 0, 1);
+            assert!(status == 0, 1);
+
+
             test_scenario::next_tx(scenario, user2);
 
             let ctx = test_scenario::ctx(scenario);
@@ -664,65 +710,14 @@ module orderbook::tests {
             assert!(earned_amount == 100, 1);
             assert!(status == 1, 1);
 
-
             let sell_order = orderbookV2::get_sell_order_by_id(&orderBook, selling_order_id);
             let ( _, _, _, _, earned_amount, status) = orderbookV2::destruct_sell_order(sell_order);
             assert!(earned_amount == 1000, 1);
             assert!(status == 1, 1);
 
-
-            // test_scenario::return_shared(orderBook);
-
-
             test_scenario::return_shared(orderBook);
 
         };
-
-        // {
-            // let orderBook = test_scenario::take_shared<OrderBook<ERC20, SUI>>(scenario);
-            
-            // let ctx = test_scenario::ctx(scenario);
-            // let coins_to_deposite = coin::mint_for_testing<SUI>(1000, ctx);
-            // let order_id = orderbookV2::create_buy_order<ERC20, SUI>(
-            //     10,
-            //     100,
-            //     coins_to_deposite, 
-            //     &mut orderBook, 
-            //     ctx
-            // );
-
-            // let buy_order = orderbookV2::get_buy_order_by_id(&orderBook, order_id);
-            // let ( _, _, _, _, earned_amount, status) = orderbookV2::destruct_buy_order(buy_order);
-            // assert!(earned_amount == 100, 1);
-            // assert!(status == 1, 1);
-
-            // test_scenario::return_shared(orderBook);
-
-        // };
-
-        // test_scenario::next_tx(scenario, user);
-        // {
-        //     let orderBook = test_scenario::take_shared<OrderBook<ERC20, SUI>>(scenario);
-            
-        //     let ctx = test_scenario::ctx(scenario);
-        //     let coins_to_deposite = coin::mint_for_testing<SUI>(1000, ctx);
-        //     let order_id = orderbookV2::create_buy_order<ERC20, SUI>(
-        //         10,
-        //         100,
-        //         coins_to_deposite, 
-        //         &mut orderBook, 
-        //         ctx
-        //     );
-            
-        //     let buy_order = orderbookV2::get_buy_order_by_id(&orderBook, order_id);
-        //     let ( _, _, _, _, earned_amount, status) = orderbookV2::destruct_buy_order(buy_order);
-        //     assert!(earned_amount == 100, 1);
-        //     assert!(status == 1, 1);
-
-
-        //     test_scenario::return_shared(orderBook);
-
-        // };
 
         test_scenario::end(scenario_val);
 
@@ -735,42 +730,3 @@ module orderbook::tests {
 
 
 ////////////////////////////////////////////////////////////////////////////////
-
-    // fun is_selling_offer_exists<S,E>(orderbook: &OrderBook<S,E>, price: u64): bool {
-    //     ofield::exists_(&orderbook.id, price)
-    // }
-
-    // public fun get_best_offer_id_ref<S,E>(orderbook: &OrderBook<S,E>): &Option<ID> {
-    //     &orderbook.best_offer
-    // }
-
-    // public fun get_offer_family_ref<S,E>(price: u64, orderbook: &OrderBook<S,E>): &vector<Order<S,E>> 
-    // {
-    //     let order_family_exist = is_offer_exists(orderbook, price);
-        
-    //     if(order_family_exist){
-    //     let OrderFamily {id: _, orders} = ofield::borrow(&orderbook.id, price);
-    //     return orders
-    //     }
-    //     else {
-    //         let OrderFamily {id: _, orders} = ofield::borrow(&orderbook.id, 0);
-    //         return orders
-    //     }
-
-    // }
-
-
-
-// if(ofield::exists_(&orderbook.id, price)){
-//     let OrderFamily {id: _, selling_orders, buying_orders: _} = 
-//         ofield::borrow<u64, OrderFamily<S,E>>(&orderbook.id, price);
-//     if( vector::length(selling_orders) > 0){
-//         return true
-//     }
-//     else {
-//         return false
-//     }
-// }
-// else {
-//     return false
-// }

@@ -5,15 +5,15 @@ compiled_package_info:
     orderbook: "0000000000000000000000000000000000000000000000000000000000000000"
     std: "0000000000000000000000000000000000000000000000000000000000000001"
     sui: "0000000000000000000000000000000000000000000000000000000000000002"
-  source_digest: DEE4E09AAB9546C2BF57263310F4D47C855A06A7FE8AE5A3D5CE9FF965C2C6E4
+  source_digest: C3ABD8B0F9E65DAEF96B842797415C10F724FC2C0D421D63E02EE71B8FA95E12
   build_flags:
-    dev_mode: true
-    test_mode: true
+    dev_mode: false
+    test_mode: false
     generate_docs: false
     generate_abis: false
     install_dir: ~
     force_recompilation: false
-    lock_file: ~
+    lock_file: ".\\Move.lock"
     additional_named_addresses: {}
     architecture: ~
     fetch_deps_only: false

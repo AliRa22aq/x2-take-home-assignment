@@ -25,7 +25,7 @@ module orderbook::orderbookV2 {
     use sui::object::{ Self, UID, ID };
     use sui::dynamic_object_field as ofield;
     
-    // use std::debug;
+    use std::debug;
     // use std::option::{Self, Option};
 
     const EInsufficientBalance:u64 = 0;
@@ -153,8 +153,11 @@ module orderbook::orderbookV2 {
                 transfer::public_transfer(buying_coins, seller_address);
 
                 // Transfer both fulfilled orders objects to their respective owners. As we can't drop them 
-                transfer::transfer(buying_order , buyer_address);
-                transfer::transfer(new_selling_order, seller_address);
+                // transfer::transfer(buying_order , buyer_address);
+                // transfer::transfer(new_selling_order, seller_address);
+
+                ofield::add(&mut orderbook.id, buying_order_id, buying_order );
+                ofield::add(&mut orderbook.id, new_selling_order_id_ref, new_selling_order );
                 ofield::add(&mut orderbook.id, _asking_price_of_each_unit, order_family );
 
             }
@@ -242,9 +245,10 @@ module orderbook::orderbookV2 {
             earned_amount: 0,
             status: TRADE_PENDING
         };
-
+        
         // Check if any customer exists to fulfill this order
         let cutomer_exists: bool = is_selling_order_exists_by_price(orderbook, _bidding_price_of_each_unit);
+        debug::print(&cutomer_exists);
 
         // // If customer exists then try to get that order
         if(cutomer_exists){
@@ -278,9 +282,11 @@ module orderbook::orderbookV2 {
                 transfer::public_transfer(buying_coins, seller_address);
 
                 // Transfer both fulfilled orders objects to their respective owners. As we can't drop them 
-                transfer::transfer(new_buying_order , buyer_address);
-                transfer::transfer(selling_order, seller_address);
+                // transfer::transfer(new_buying_order , buyer_address);
+                // transfer::transfer(selling_order, seller_address);
 
+                ofield::add(&mut orderbook.id, selling_order_id, selling_order );
+                ofield::add(&mut orderbook.id, new_buying_order_id_ref, new_buying_order );
                 ofield::add(&mut orderbook.id, _bidding_price_of_each_unit, order_family );
 
 
@@ -449,6 +455,7 @@ module orderbook::orderbookV2 {
     }
 
 
+
 }
 
 
@@ -612,6 +619,115 @@ module orderbook::tests {
         test_scenario::end(scenario_val);
 
     }
+
+    #[test]
+    public fun test_matching_engine() {
+        let user = @0xA;
+        let user1 = @0xB;
+        let user2 = @0xC;
+
+        let scenario_val = test_scenario::begin(user);
+        let scenario = &mut scenario_val;
+        {
+            let ctx = test_scenario::ctx(scenario);
+            orderbookV2::create_orderbook<ERC20, SUI>(ctx);
+        };
+
+        test_scenario::next_tx(scenario, user1);
+        {
+            let orderBook = test_scenario::take_shared<OrderBook<ERC20, SUI>>(scenario);
+            
+            let ctx = test_scenario::ctx(scenario);
+            let coins_to_sell = coin::mint_for_testing<ERC20>(100, ctx);
+            let selling_order_id = orderbookV2::create_sell_order<ERC20, SUI>(
+                10,
+                100,
+                coins_to_sell, 
+                &mut orderBook, 
+                ctx
+            );
+
+            test_scenario::next_tx(scenario, user2);
+
+            let ctx = test_scenario::ctx(scenario);
+            let coins_to_deposite = coin::mint_for_testing<SUI>(1000, ctx);
+            let buying_order_id = orderbookV2::create_buy_order<ERC20, SUI>(
+                10,
+                100,
+                coins_to_deposite, 
+                &mut orderBook, 
+                ctx
+            );
+
+            let buy_order = orderbookV2::get_buy_order_by_id(&orderBook, buying_order_id);
+            let ( _, _, _, _, earned_amount, status) = orderbookV2::destruct_buy_order(buy_order);
+            assert!(earned_amount == 100, 1);
+            assert!(status == 1, 1);
+
+
+            let sell_order = orderbookV2::get_sell_order_by_id(&orderBook, selling_order_id);
+            let ( _, _, _, _, earned_amount, status) = orderbookV2::destruct_sell_order(sell_order);
+            assert!(earned_amount == 1000, 1);
+            assert!(status == 1, 1);
+
+
+            // test_scenario::return_shared(orderBook);
+
+
+            test_scenario::return_shared(orderBook);
+
+        };
+
+        // {
+            // let orderBook = test_scenario::take_shared<OrderBook<ERC20, SUI>>(scenario);
+            
+            // let ctx = test_scenario::ctx(scenario);
+            // let coins_to_deposite = coin::mint_for_testing<SUI>(1000, ctx);
+            // let order_id = orderbookV2::create_buy_order<ERC20, SUI>(
+            //     10,
+            //     100,
+            //     coins_to_deposite, 
+            //     &mut orderBook, 
+            //     ctx
+            // );
+
+            // let buy_order = orderbookV2::get_buy_order_by_id(&orderBook, order_id);
+            // let ( _, _, _, _, earned_amount, status) = orderbookV2::destruct_buy_order(buy_order);
+            // assert!(earned_amount == 100, 1);
+            // assert!(status == 1, 1);
+
+            // test_scenario::return_shared(orderBook);
+
+        // };
+
+        // test_scenario::next_tx(scenario, user);
+        // {
+        //     let orderBook = test_scenario::take_shared<OrderBook<ERC20, SUI>>(scenario);
+            
+        //     let ctx = test_scenario::ctx(scenario);
+        //     let coins_to_deposite = coin::mint_for_testing<SUI>(1000, ctx);
+        //     let order_id = orderbookV2::create_buy_order<ERC20, SUI>(
+        //         10,
+        //         100,
+        //         coins_to_deposite, 
+        //         &mut orderBook, 
+        //         ctx
+        //     );
+            
+        //     let buy_order = orderbookV2::get_buy_order_by_id(&orderBook, order_id);
+        //     let ( _, _, _, _, earned_amount, status) = orderbookV2::destruct_buy_order(buy_order);
+        //     assert!(earned_amount == 100, 1);
+        //     assert!(status == 1, 1);
+
+
+        //     test_scenario::return_shared(orderBook);
+
+        // };
+
+        test_scenario::end(scenario_val);
+
+    }
+
 
 }
 

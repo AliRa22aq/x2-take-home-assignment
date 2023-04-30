@@ -25,7 +25,7 @@ module orderbook::orderbookV2 {
     use sui::object::{ Self, UID, ID };
     use sui::dynamic_object_field as ofield;
     
-    use std::debug;
+    // use std::debug;
     // use std::option::{Self, Option};
 
     const EInsufficientBalance:u64 = 0;
@@ -145,16 +145,9 @@ module orderbook::orderbookV2 {
                 new_selling_order.earned_amount = selling_earned_amount;
                 buying_order.earned_amount = buying_earned_amount;
 
-                let buyer_address = buying_order.owner;
-                let seller_address = new_selling_order.owner;
-
                 // Transfer new assets to both parties
-                transfer::public_transfer(selling_coins , buyer_address);
-                transfer::public_transfer(buying_coins, seller_address);
-
-                // Transfer both fulfilled orders objects to their respective owners. As we can't drop them 
-                // transfer::transfer(buying_order , buyer_address);
-                // transfer::transfer(new_selling_order, seller_address);
+                transfer::public_transfer(selling_coins , buying_order.owner);
+                transfer::public_transfer(buying_coins, new_selling_order.owner);
 
                 ofield::add(&mut orderbook.id, buying_order_id, buying_order );
                 ofield::add(&mut orderbook.id, new_selling_order_id_ref, new_selling_order );
@@ -248,7 +241,7 @@ module orderbook::orderbookV2 {
         
         // Check if any customer exists to fulfill this order
         let cutomer_exists: bool = is_selling_order_exists_by_price(orderbook, _bidding_price_of_each_unit);
-        debug::print(&cutomer_exists);
+        // debug::print(&cutomer_exists);
 
         // // If customer exists then try to get that order
         if(cutomer_exists){
@@ -274,16 +267,9 @@ module orderbook::orderbookV2 {
                 new_buying_order.earned_amount = selling_deposited_amount;
                 selling_order.earned_amount = buying_deposited_amount;
 
-                let buyer_address = new_buying_order.owner;
-                let seller_address = selling_order.owner;
-
                 // Transfer new assets to both parties
-                transfer::public_transfer(selling_coins , buyer_address);
-                transfer::public_transfer(buying_coins, seller_address);
-
-                // Transfer both fulfilled orders objects to their respective owners. As we can't drop them 
-                // transfer::transfer(new_buying_order , buyer_address);
-                // transfer::transfer(selling_order, seller_address);
+                transfer::public_transfer(selling_coins , new_buying_order.owner);
+                transfer::public_transfer(buying_coins, selling_order.owner);
 
                 ofield::add(&mut orderbook.id, selling_order_id, selling_order );
                 ofield::add(&mut orderbook.id, new_buying_order_id_ref, new_buying_order );
@@ -293,6 +279,8 @@ module orderbook::orderbookV2 {
             }
 
             // Partial Match: TODO
+
+
 
             // Matched but not fulfilled because any reason.
             else {
@@ -353,60 +341,75 @@ module orderbook::orderbookV2 {
         
     }
 
-
     public fun is_order_family_exists_by_price<S,E>(orderbook: &OrderBook<S,E>, price: u64): bool {
         ofield::exists_(&orderbook.id, price)
     }
 
     public entry fun cancel_sell_order<S,E>(
-        o: &mut SellingOrder<S,E>, 
+        order_id: ID, 
         ob: &mut OrderBook<S,E>,
         ctx: &mut TxContext
         ){
 
-        assert!(o.status == TRADE_PENDING || o.status == TRADE_PARTIALLY_FULFILLED, ENotAllowed);
-        assert!(o.owner != tx_context::sender(ctx), ENotAllowed);
+        assert!(ofield::exists_( &ob.id, order_id ), EOrderNotExists);
+        
+        let order = ofield::remove<ID, SellingOrder<S,E>>(&mut ob.id, order_id);
+        assert!(order.status == TRADE_PENDING || order.status == TRADE_PARTIALLY_FULFILLED, ENotAllowed);
+        assert!(order.owner == tx_context::sender(ctx), ENotAllowed);
 
         // Remove ID from the OrderFamily
-        let price = o.asking_price_of_each_unit;
+        let price = order.asking_price_of_each_unit;
         let of = ofield::borrow_mut<u64, OrderFamily<S,E>>(&mut ob.id, price);
-        let (exist, index_of_order_id) = vector::index_of<ID>(&of.selling_orders, &object::uid_to_inner(&o.id));
+        let (exist, index_of_order_id) = vector::index_of<ID>(&of.selling_orders, &order_id);
         assert!(exist, ENotAllowed);
         vector::remove<ID>(&mut of.selling_orders, index_of_order_id);
+        order.status = TRADE_CANCELED;
+        
+        let to_take = order.selling_amount;
+        let to_take_from = &mut order.deposited_balance;
 
-        o.status = TRADE_CANCELED;
+        let coins_to_return = coin::take(to_take_from, to_take, ctx);
+        transfer::public_transfer(coins_to_return , order.owner);
+        
+        ofield::add(&mut ob.id, order_id, order );
 
     }   
 
-
-    // public entry fun cancel_buy_order<S,E>(){}
-        public entry fun cancel_buy_order<S,E>(
-        o: &mut BuyingOrder<S,E>, 
+    public entry fun cancel_buy_order<S,E>(
+        order_id: ID, 
         ob: &mut OrderBook<S,E>,
         ctx: &mut TxContext
         ){
 
-        assert!(o.status == TRADE_PENDING || o.status == TRADE_PARTIALLY_FULFILLED, ENotAllowed);
-        assert!(o.owner != tx_context::sender(ctx), ENotAllowed);
+        assert!(ofield::exists_( &ob.id, order_id ), EOrderNotExists);
+        
+        let order = ofield::remove<ID, BuyingOrder<S,E>>(&mut ob.id, order_id);
+        assert!(order.status == TRADE_PENDING || order.status == TRADE_PARTIALLY_FULFILLED, ENotAllowed);
+        assert!(order.owner == tx_context::sender(ctx), ENotAllowed);
 
         // Remove ID from the OrderFamily
-        let price = o.bidding_price_of_each_unit;
+        let price = order.bidding_price_of_each_unit;
         let of = ofield::borrow_mut<u64, OrderFamily<S,E>>(&mut ob.id, price);
-        let (exist, index_of_order_id) = vector::index_of<ID>(&of.buying_orders, &object::uid_to_inner(&o.id));
+        let (exist, index_of_order_id) = vector::index_of<ID>(&of.buying_orders, &order_id);
         assert!(exist, ENotAllowed);
         vector::remove<ID>(&mut of.buying_orders, index_of_order_id);
+        order.status = TRADE_CANCELED;
+        
+        let to_take = order.buying_amount * order.bidding_price_of_each_unit;
+        let to_take_from = &mut order.deposited_balance;
 
-        o.status = TRADE_CANCELED;
+        let coins_to_return = coin::take(to_take_from, to_take, ctx);
+        transfer::public_transfer(coins_to_return , order.owner);
+        
+        ofield::add(&mut ob.id, order_id, order );
 
     }   
-
 
     public entry fun take_sell_order_by_price<S,E>(){}
     public entry fun take_sell_order_by_id<S,E>(){}
 
     public entry fun take_buy_order_by_price<S,E>(){}
     public entry fun take_buy_order_by_id<S,E>(){}
-
 
     public entry fun take_best_sell_order<S,E>(){}
     public entry fun take_best_buy_order<S,E>(){}
@@ -462,7 +465,7 @@ module orderbook::orderbookV2 {
         }
     }
 
-    public fun destruct_sell_order<S,E>(o: &SellingOrder<S,E>): 
+    public fun destruct_sell_order<S,E>(o: &SellingOrder<S,E>):
     (address, u64, u64, u64, u64, u64) {
 
         (
@@ -476,7 +479,7 @@ module orderbook::orderbookV2 {
 
     }
 
-    public fun destruct_buy_order<S,E>(o: &BuyingOrder<S,E>): 
+    public fun destruct_buy_order<S,E>(o: &BuyingOrder<S,E>):
     (address, u64, u64, u64, u64, u64) {
 
         (
@@ -493,7 +496,6 @@ module orderbook::orderbookV2 {
     public fun get_best_prices<S,E>(ob: &OrderBook<S,E>): (u64, u64) {
         (ob.best_selling_price, ob.best_buying_price)
     }
-
 
 
 }
@@ -714,6 +716,77 @@ module orderbook::tests {
             let ( _, _, _, _, earned_amount, status) = orderbookV2::destruct_sell_order(sell_order);
             assert!(earned_amount == 1000, 1);
             assert!(status == 1, 1);
+
+            test_scenario::return_shared(orderBook);
+
+        };
+
+        test_scenario::end(scenario_val);
+
+    }
+
+    #[test]
+    public fun test_cancel_order() {
+        let user = @0xA;
+        let user1 = @0xB;
+        let user2 = @0xC;
+
+        let scenario_val = test_scenario::begin(user);
+        let scenario = &mut scenario_val;
+        {
+            let ctx = test_scenario::ctx(scenario);
+            orderbookV2::create_orderbook<ERC20, SUI>(ctx);
+        };
+
+        // cancle sell order
+        test_scenario::next_tx(scenario, user1);
+        {
+    
+            let orderBook = test_scenario::take_shared<OrderBook<ERC20, SUI>>(scenario);
+            
+            let ctx = test_scenario::ctx(scenario);
+            let coins_to_sell = coin::mint_for_testing<ERC20>(100, ctx);
+            let selling_order_id = orderbookV2::create_sell_order<ERC20, SUI>(
+                10,
+                100,
+                coins_to_sell, 
+                &mut orderBook, 
+                ctx
+            );
+
+            orderbookV2::cancel_sell_order(selling_order_id, &mut orderBook, ctx);
+
+            let sell_order = orderbookV2::get_sell_order_by_id(&orderBook, selling_order_id);
+            let ( _, _, _, _, earned_amount, status) = orderbookV2::destruct_sell_order(sell_order);
+            assert!(earned_amount == 0, 1);
+            assert!(status == 3, 1);
+
+            test_scenario::return_shared(orderBook);
+
+        };
+
+        // cancle buy order
+        test_scenario::next_tx(scenario, user2);
+        {
+    
+            let orderBook = test_scenario::take_shared<OrderBook<ERC20, SUI>>(scenario);
+            
+            let ctx = test_scenario::ctx(scenario);
+            let coins_to_deposite = coin::mint_for_testing<SUI>(1000, ctx);
+            let buy_order_id = orderbookV2::create_buy_order<ERC20, SUI>(
+                10,
+                100,
+                coins_to_deposite, 
+                &mut orderBook, 
+                ctx
+            );
+
+            orderbookV2::cancel_buy_order(buy_order_id, &mut orderBook, ctx);
+
+            let buy_order = orderbookV2::get_buy_order_by_id(&orderBook, buy_order_id);
+            let ( _, _, _, _, earned_amount, status) = orderbookV2::destruct_buy_order(buy_order);
+            assert!(earned_amount == 0, 1);
+            assert!(status == 3, 1);
 
             test_scenario::return_shared(orderBook);
 

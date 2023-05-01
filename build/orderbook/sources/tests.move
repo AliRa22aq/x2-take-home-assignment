@@ -167,8 +167,12 @@ module orderbook::orderbookV2 {
                 ofield::add(&mut orderbook.id, new_selling_order_id_ref, new_selling_order );
                 ofield::add(&mut orderbook.id, _asking_price_of_each_unit, order_family );
 
+                // Cheaper is better
                 // If no best offer exists already then assign this one as best available offer
-                if( _asking_price_of_each_unit > orderbook.best_selling_price){
+                if(orderbook.best_selling_price == 0){
+                    orderbook.best_selling_price = _asking_price_of_each_unit;
+                }
+                else if( _asking_price_of_each_unit < orderbook.best_selling_price){
                     orderbook.best_selling_price = _asking_price_of_each_unit;
                 };
 
@@ -203,8 +207,12 @@ module orderbook::orderbookV2 {
 
             };
 
+            // Cheaper is better
             // If no best offer exists already then assign this one as best available offer
-            if( _asking_price_of_each_unit > orderbook.best_selling_price){
+            if(orderbook.best_selling_price == 0){
+                orderbook.best_selling_price = _asking_price_of_each_unit;
+            }
+            else if( _asking_price_of_each_unit < orderbook.best_selling_price){
                 orderbook.best_selling_price = _asking_price_of_each_unit;
             };
 
@@ -292,6 +300,7 @@ module orderbook::orderbookV2 {
                 ofield::add(&mut orderbook.id, new_buying_order_id_ref, new_buying_order );
                 ofield::add(&mut orderbook.id, _bidding_price_of_each_unit, order_family );
 
+                // More is better
                 // If no best offer exists already then assign this one as best available offer
                 if( _bidding_price_of_each_unit > orderbook.best_buying_price){
                     orderbook.best_buying_price = _bidding_price_of_each_unit;
@@ -428,7 +437,6 @@ module orderbook::orderbookV2 {
         order.status = TRADE_FULFILLED;
         order.earned_amount = coin::value(&payment);
 
-
         let to_take = order.selling_amount;
         let to_take_from = &mut order.deposited_balance;
 
@@ -463,7 +471,6 @@ module orderbook::orderbookV2 {
         order.status = TRADE_FULFILLED;
         order.earned_amount = coin::value(&payment);
 
-
         let to_take = order.buying_amount * order.bidding_price_of_each_unit;
         let to_take_from = &mut order.deposited_balance;
 
@@ -475,8 +482,94 @@ module orderbook::orderbookV2 {
 
     }
 
-    public entry fun take_best_sell_order<S,E>(){}
-    public entry fun take_best_buy_order<S,E>(){}
+    // Buy on market
+    public entry fun take_best_sell_order<S,E>(
+        ob: &mut OrderBook<S,E>,
+        payment: Coin<E>,
+        ctx: &mut TxContext
+    ){
+
+        let price = ob.best_selling_price;
+        let order_family = ofield::remove<u64, OrderFamily<S,E> >(&mut ob.id, price);
+
+        assert!(vector::length(&order_family.selling_orders) > 0, 1 );
+
+        let order_id = vector::remove<ID>(&mut order_family.selling_orders, 0);
+        let order = ofield::remove<ID, SellingOrder<S,E>>(&mut ob.id, order_id);
+        let required_amout_to_buy = order.asking_price_of_each_unit * order.selling_amount;
+
+        assert!(order.status == TRADE_PENDING || order.status == TRADE_PARTIALLY_FULFILLED, ENotAllowed);
+        assert!(coin::value(&payment) == required_amout_to_buy, 1);
+
+        order.status = TRADE_FULFILLED;
+        order.earned_amount = coin::value(&payment);
+
+        let to_take = order.selling_amount;
+        let to_take_from = &mut order.deposited_balance;
+
+        let coins_to_send_to_buyer = coin::take(to_take_from, to_take, ctx);
+        transfer::public_transfer( coins_to_send_to_buyer , tx_context::sender(ctx) );
+        transfer::public_transfer( payment , order.owner );
+        
+
+        // If this is the only sell order at this price then update the best selling price
+        if(vector::length(&order_family.selling_orders) == 0){
+            // But how? :/
+            // How to find the next least selling price among the orders?
+
+            // For now reset it to zero
+            ob.best_selling_price = 0;
+
+        };
+
+        ofield::add(&mut ob.id, order_id, order );
+        ofield::add(&mut ob.id, price, order_family );
+
+    }
+
+    // Sell on market
+    public entry fun take_best_buy_order<S,E>(
+        ob: &mut OrderBook<S,E>,
+        payment: Coin<S>,
+        ctx: &mut TxContext
+    ){
+
+        let price = ob.best_buying_price;
+        let order_family = ofield::remove<u64, OrderFamily<S,E> >(&mut ob.id, price);
+
+        assert!(vector::length(&order_family.buying_orders) > 0, 1 );
+
+        let order_id = vector::remove<ID>(&mut order_family.selling_orders, 0);
+        let order = ofield::remove<ID, BuyingOrder<S,E>>(&mut ob.id, order_id);
+
+        assert!(order.status == TRADE_PENDING || order.status == TRADE_PARTIALLY_FULFILLED, ENotAllowed);
+        assert!(coin::value(&payment) == order.buying_amount, 1);
+
+        order.status = TRADE_FULFILLED;
+        order.earned_amount = coin::value(&payment);
+
+        let to_take = order.buying_amount * order.bidding_price_of_each_unit;
+        let to_take_from = &mut order.deposited_balance;
+
+        let coins_to_send_to_seller = coin::take(to_take_from, to_take, ctx);
+        transfer::public_transfer( coins_to_send_to_seller , tx_context::sender(ctx) );
+        transfer::public_transfer( payment , order.owner );
+        
+
+        // If this is the only sell order at this price then update the best selling price
+        if(vector::length(&order_family.buying_orders) == 0){
+            // But how? :/
+            // How to find the next least selling price among the orders?
+
+            // For now reset it to zero
+            ob.best_buying_price = 0;
+
+        };
+
+        ofield::add(&mut ob.id, order_id, order );
+        ofield::add(&mut ob.id, price, order_family );
+
+    }
 
 
     public fun get_sell_order_by_id<S,E>(orderbook: &OrderBook<S,E>, selling_order_id: ID): &SellingOrder<S,E>{
